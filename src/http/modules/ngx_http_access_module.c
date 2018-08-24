@@ -9,22 +9,27 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#if 1
+
 typedef struct {
-	in_addr_t mask;
-	in_addr_t addr;
-	ngx_uint_t deny;		/* unsigned deny: 1 */
-}ngx_http_access_rule_t;
+	in_addr_t		mask;
+	in_addr_t		addr;
+	ngx_uint_t		deny;
+} ngx_http_access_rule_t;
 
 typedef struct {
 	ngx_array_t *rules;
-}ngx_http_access_loc_conf_t;
+} ngx_http_access_loc_conf_t;
 
 static ngx_int_t ngx_http_access_handler(ngx_http_request_t *r);
 
+static ngx_int_t ngx_http_access_inet(ngx_http_request_t *r, ngx_http_access_loc_conf_t *alcf, in_addr_t addr);
+
 static char *ngx_http_access_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
-static void ngx_http_access_create_loc_conf(ngx_conf_t *cf);
-static char *ngx_http_access_merge_loc_conf(ngx_conf_t *cf, void *prev, void *conf);
 static ngx_int_t ngx_http_access_init(ngx_conf_t *cf);
+static void *ngx_http_access_create_loc_conf(ngx_conf_t *cf);
+static char *ngx_http_access_merge_loc_conf(ngx_conf_t *cf, void *prev, void *conf);
+
 
 static ngx_command_t ngx_http_access_commands[] = {
 	{ ngx_string("allow"),
@@ -42,8 +47,8 @@ static ngx_command_t ngx_http_access_commands[] = {
 	  NGX_HTTP_LOC_CONF_OFFSET,
 	  0,
 	  NULL },
-
-	ngx_null_command
+	  
+	 ngx_null_command
 };
 
 static ngx_http_module_t ngx_http_access_module_ctx = {
@@ -63,52 +68,70 @@ static ngx_http_module_t ngx_http_access_module_ctx = {
 ngx_module_t ngx_http_access_module = {
 	NGX_MODULE_V1,
 	&ngx_http_access_module_ctx,
-	ngx_http_access_commands,
-	NGX_HTTP_MODULE,
-	NULL,							/* init master */
-	NULL,							/* init module */
-	NULL,							/* init process */
-	NULL,							/* init thread */
-	NULL,							/* exit thread */
-	NULL,							/* exit process */
-	NULL,							/* exit master */
+    ngx_http_access_commands,
+    NGX_HTTP_MODULE,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
 	NGX_MODULE_V1_PADDING
 };
+
+static ngx_int_t ngx_http_access_handler(ngx_http_request_t *r)
+{
+	struct sockaddr_in *sin;
+	ngx_http_access_loc_conf_t *alcf;
+
+	alcf = ngx_http_get_module_loc_conf(r, ngx_http_access_module);
+	if(alcf == NULL) {
+		return NGX_ERROR;
+	}
+
+	switch (r->connection->sockaddr->sa_family)
+	{
+		case AF_INET:
+			sin = (struct sockaddr_in*)r->connection->sockaddr;
+			return ngx_http_access_inet(r, alcf, sin->sin_addr.s_addr);
+			break;
+	}
+	
+	return NGX_DECLINED;
+}
+
+static ngx_int_t ngx_http_access_inet(ngx_http_request_t *r, ngx_http_access_loc_conf_t *alcf, in_addr_t addr)
+{
+	
+}
 
 static char *ngx_http_access_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
 	ngx_http_access_loc_conf_t *alcf = conf;
 	ngx_int_t rc;
 	ngx_uint_t all;
-	ngx_str_t *value;
 	ngx_cidr_t cidr;
+	ngx_str_t *value;
 	ngx_http_access_rule_t *rule;
+	
 
 	all = 0;
-	ngx_memzero(&cidr, sizeof(ngx_cidr_t));
+	ngx_memset(&cidr, 0, sizeof(ngx_cidr_t));
 
 	value = cf->args->elts;
 
-	if(value[1].len == 3 && ngx_strcmp(value[1].data, "all") == 0){
+	if(value[1].len == 3 && ngx_strcmp(value[1].data, "all") == 0) {
 		all = 1;
 	} else {
-		rc = ngx_ptocidr(&value[1], cidr);
+		rc = ngx_ptocidr(&value[1], &cidr);
 		if(rc == NGX_ERROR) {
 			ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "invalid parameter \"%V\"", &value[1]);
 			return NGX_CONF_ERROR;
 		}
-		if(rc == NGX_DONE) {
-			ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "low address bits of %V are meaningless in " &value[1]);
-		}
 	}
-
+	
 	if(cidr.family == AF_INET || all) {
-		if(alcf->rules == NULL) {
-			alcf->rules = ngx_array_create(cf->pool, 4, sizeof(ngx_http_access_rule_t));
-			if(alcf->rules == NULL) {
-				return NGX_CONF_ERROR;
-			}
-		}
 		rule = ngx_array_push(alcf->rules);
 		if(rule == NULL) {
 			return NGX_CONF_ERROR;
@@ -117,33 +140,30 @@ static char *ngx_http_access_rule(ngx_conf_t *cf, ngx_command_t *cmd, void *conf
 		rule->addr = cidr.u.in.addr;
 		rule->deny = (value[0].data[0] == 'd') ? 1 : 0;
 	}
-
 	return NGX_CONF_OK;
-	
 }
 
 
-static void ngx_http_access_create_loc_conf(ngx_conf_t *cf)
+static void *ngx_http_access_create_loc_conf(ngx_conf_t * cf)
 {
-	ngx_http_access_loc_conf_t *conf;
-	conf = ngx_palloc(cf->pool, sizeof(ngx_http_access_loc_conf_t));
+	ngx_http_access_loc_conf_t *alcf;
 
- 	if(conf == NULL) {
+	alcf = ngx_palloc(cf->pool, sizeof(ngx_http_access_loc_conf_t));
+	if(alcf == NULL) {
 		return NULL;
 	}
-	
-	return conf;
+	return alcf;
 }
 
-static char *ngx_http_access_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
+static char *ngx_http_access_merge_loc_conf(ngx_conf_t * cf, void * prev, void * conf)
 {
-	ngx_http_access_loc_conf_t *prev = parent;
-	ngx_http_access_loc_conf_t *conf = child;
+	ngx_http_access_loc_conf_t *myprev = prev;
+	ngx_http_access_loc_conf_t *myconf = conf;
 
-	if(conf->rules == NULL) {
-		conf->rules = prev->rules;
+	if(myconf->rules == NULL) {
+		myconf->rules = myprev->rules;
 	}
-	return NGX_CONF_OK;
+	return NGX_OK;
 }
 
 static ngx_int_t ngx_http_access_init(ngx_conf_t *cf)
@@ -152,18 +172,18 @@ static ngx_int_t ngx_http_access_init(ngx_conf_t *cf)
 	ngx_http_core_main_conf_t *cmcf;
 
 	cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_access_module);
+	if(cmcf == NULL) {
+		return NGX_ERROR;
+	}
 	h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
-
 	if(h == NULL) {
 		return NGX_ERROR;
 	}
-
-	h = ngx_http_access_handler;
+	*h = ngx_http_access_handler;
 	return NGX_OK;
 }
 
-
-
+#endif
 /*===============================================================================*/
 #if 0 /* study */
 
