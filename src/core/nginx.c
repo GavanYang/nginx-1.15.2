@@ -172,6 +172,8 @@ ngx_module_t ngx_core_module = {
 static ngx_uint_t   ngx_show_help;
 static ngx_uint_t   ngx_show_version;
 static ngx_uint_t   ngx_show_configure;
+static u_char       *ngx_prefix;
+static u_char       ngx_conf_file;
 
 
 static char **ngx_os_environ;
@@ -179,6 +181,8 @@ static char **ngx_os_environ;
 int ngx_cdecl
 main(int argc, char **argv)
 {
+    ngx_log_t *log;
+
     /* 初始化每个errno对应的错误描述字符串，使用strerror函数将errno转换成错误信息字符串 */
     if(ngx_strerror_init() != NGX_OK){
         return 1;
@@ -195,6 +199,14 @@ main(int argc, char **argv)
             return 0;
         }
     }
+    
+    ngx_time_init();
+
+    ngx_pid = ngx_getpid();
+    ngx_parent = ngx_getppid();
+
+    log = ngx_log_init(ngx_prefix);
+    
     
     return 0;
 }
@@ -296,11 +308,40 @@ ngx_get_options(int argc, char *const *argv)
                     ngx_test_config = 1;
                     ngx_dump_config = 1;
                     break;
+                case 'p':
+                if (*p) {
+                    ngx_prefix = p;
+                    goto next;
+                }
+
+                if (argv[++i]) {
+                    ngx_prefix = (u_char *) argv[i];
+                    goto next;
+                }
+
+                ngx_log_stderr(0, "option \"-p\" requires directory name");
+                return NGX_ERROR;
+
+                case 'c':
+                    if (*p) {
+                        ngx_conf_file = p;
+                        goto next;
+                    }
+
+                    if (argv[++i]) {
+                        ngx_conf_file = (u_char *) argv[i];
+                        goto next;
+                    }
+
+                    ngx_log_stderr(0, "option \"-c\" requires file name");
+                    return NGX_ERROR;
                 default:
                     ngx_log_stderr(0, "invalid option: \"%s\"", *(p - 1));
                     return NGX_ERROR;
             }
         }
+    next:
+        continue;
     }
 
     return NGX_OK;
